@@ -322,40 +322,41 @@ async function createEvent(event) {
 
 async function renderEventSettings(eventId) {
   const event = visibleEvents.find(item => item.id === eventId);
-  const [{ data: rooms, error: roomError }, { data: vehicles, error: vehicleError }, { data: members, error: membersError }, { data: roster, error: rosterError }] = await Promise.all([
+  const [{ data: rooms, error: roomError }, { data: vehicles, error: vehicleError }, { data: members, error: membersError }] = await Promise.all([
     db.from('rooms').select('*').eq('event_id', eventId).order('created_at'),
     db.from('vehicles').select('*').eq('event_id', eventId).order('created_at'),
-    db.from('event_members').select('user_id,attendance_status,full_name').eq('event_id', eventId).eq('status', 'registered'),
-    db.rpc('resource_roster', { p_event_id: eventId })
+    db.rpc('event_registration_details', { p_event_id: eventId })
   ]);
   if (roomError) return fail(roomError);
   if (vehicleError) return fail(vehicleError);
   if (membersError) return fail(membersError);
-  if (rosterError) return fail(rosterError);
-  const memberIds = (members || []).map(item => item.user_id);
-  let profiles = [];
-  if (memberIds.length) {
-    const { data, error } = await db.from('profiles').select('id,full_name').in('id', memberIds);
-    if (error) return fail(error);
-    profiles = data || [];
-  }
-  const profileNames = new Map(profiles.map(item => [item.id, item.full_name]));
-  const rosterByMember = new Map();
-  (roster || []).forEach(item => {
-    const selections = rosterByMember.get(item.user_id) || {};
-    selections[item.resource_type] = item.resource_name;
-    rosterByMember.set(item.user_id, selections);
-  });
   const attendingCount = (members || []).filter(item => item.attendance_status === 'attending').length;
+  const registrationHeaders = ['中文姓名', '護照英文姓名', '電話', '西元出生年月日', 'Email', '報名意願', '房間', '車輛／車位'];
+  const registrationData = (members || []).map(item => {
+    const attending = item.attendance_status === 'attending';
+    const attendanceLabel = attending ? '確定參加' : item.attendance_status === 'not_attending' ? '不參加' : '尚未回覆';
+    return [item.full_name || '未填寫', item.passport_english_name || '未填寫', item.phone || '未填寫', item.date_of_birth || '未填寫', item.email || '未填寫', attendanceLabel, attending ? item.room_name || '尚未選擇' : '—', attending ? item.vehicle_name || '尚未選擇' : '—'];
+  });
   const participantRows = (members || []).map(item => {
     const attending = item.attendance_status === 'attending';
-    const selections = rosterByMember.get(item.user_id) || {};
-    const memberName = item.full_name || profileNames.get(item.user_id) || '未填姓名';
     const attendanceLabel = attending ? '確定參加' : item.attendance_status === 'not_attending' ? '不參加' : '尚未回覆';
-    return `<tr><td>${escapeHtml(memberName)}</td><td>${attendanceLabel}</td><td>${attending ? escapeHtml(selections.room || '尚未選擇') : '—'}</td><td>${attending ? escapeHtml(selections.vehicle || '尚未選擇') : '—'}</td></tr>`;
-  }).join('') || '<tr><td colspan="4" class="small">尚無受邀者回覆。</td></tr>';
-  app.innerHTML = `<button class="link-button" id="settings-back">← 返回管理後台</button><div class="page-head"><div><div class="eyebrow">活動儀表板</div><h1>${escapeHtml(event.title)}</h1><div class="sub">快速查看團員報名意願、房間與共乘安排。</div></div></div><section class="panel"><div class="row"><div><strong>建立邀請連結</strong><p class="small">此連結不限人數使用。</p></div><span class="right"><button class="button" id="new-invite">建立連結</button></span></div></section><div class="section-title"><h2>報名與選位總覽</h2><span class="small">${attendingCount} 人確定參加・共 ${members?.length || 0} 位受邀團員</span></div><section class="panel table-panel"><div class="roster-table-wrap"><table class="roster-table"><thead><tr><th>團員</th><th>報名意願</th><th>房間</th><th>車輛／車位</th></tr></thead><tbody>${participantRows}</tbody></table></div></section><div class="section-title"><h2>第二階段設定</h2></div><section class="panel"><p class="small">確認報名名單及車輛後，先新增房間／車輛，接著開放選位。開放後可另行通知團員。</p><button class="button ${event.resource_selection_open ? 'secondary' : ''}" id="toggle-resources">${event.resource_selection_open ? '關閉房間與共乘選擇' : '開放房間與共乘選擇'}</button></section><div class="resource-grid" style="margin-top:14px"><section class="panel"><div class="resource-head"><h3>房間名額</h3></div>${rooms.map(room => `<div class="resource row"><label>${escapeHtml(room.name)}</label><span class="right"><input class="capacity-input" type="number" min="1" value="${room.capacity}" data-table="rooms" data-id="${room.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無房間。</p>'}<form id="add-room-form"><div class="field"><label>新增房間（房名｜床位數）</label><div class="row"><input name="name" required placeholder="山景四人房"><input name="capacity" type="number" min="1" required placeholder="4"><button class="button" type="submit">新增</button></div></div></form></section><section class="panel"><div class="resource-head"><h3>共乘車輛</h3></div>${vehicles.map(vehicle => `<div class="resource row"><label>${escapeHtml(vehicle.name)}・${escapeHtml(vehicle.driver_name || '')}</label><span class="right"><input class="capacity-input" type="number" min="0" value="${vehicle.seats}" data-table="vehicles" data-id="${vehicle.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無車輛。</p>'}<form id="add-vehicle-form"><div class="field"><label>新增車輛</label><input name="name" required placeholder="小美的車"><input name="driver_name" required placeholder="駕駛姓名"><div class="row"><input name="seats" type="number" min="0" required placeholder="乘客座位"><input name="departure" placeholder="出發地"><button class="button" type="submit">新增</button></div></div></form></section></div><div id="invite-result"></div>`;
+    return `<tr><td>${escapeHtml(item.full_name || '未填寫')}</td><td>${escapeHtml(item.passport_english_name || '未填寫')}</td><td>${escapeHtml(item.phone || '未填寫')}</td><td>${escapeHtml(item.date_of_birth || '未填寫')}</td><td>${escapeHtml(item.email || '未填寫')}</td><td>${attendanceLabel}</td><td>${attending ? escapeHtml(item.room_name || '尚未選擇') : '—'}</td><td>${attending ? escapeHtml(item.vehicle_name || '尚未選擇') : '—'}</td></tr>`;
+  }).join('') || '<tr><td colspan="8" class="small">尚無受邀團員。</td></tr>';
+  app.innerHTML = `<button class="link-button" id="settings-back">← 返回管理後台</button><div class="page-head"><div><div class="eyebrow">活動儀表板</div><h1>${escapeHtml(event.title)}</h1><div class="sub">查看訂票所需的團員基本資料、報名意願與選位狀況。</div></div></div><section class="panel"><div class="row"><div><strong>建立邀請連結</strong><p class="small">此連結不限人數使用。</p></div><span class="right"><button class="button" id="new-invite">建立連結</button></span></div></section><div class="section-title"><div><h2>報名資料與選位總覽</h2><span class="small">${attendingCount} 人確定參加・共 ${members?.length || 0} 位受邀團員</span></div><button class="button secondary" id="copy-registration-data" type="button">複製表格資料</button></div><section class="panel table-panel"><div class="roster-table-wrap"><table class="roster-table booking-table"><thead><tr>${registrationHeaders.map(header => `<th>${header}</th>`).join('')}</tr></thead><tbody>${participantRows}</tbody></table></div><p class="small table-privacy-note">此表含個人資料，請僅用於本活動訂票與行程安排，勿轉傳給非必要人員。</p></section><div class="section-title"><h2>第二階段設定</h2></div><section class="panel"><p class="small">確認報名名單及車輛後，先新增房間／車輛，接著開放選位。開放後可另行通知團員。</p><button class="button ${event.resource_selection_open ? 'secondary' : ''}" id="toggle-resources">${event.resource_selection_open ? '關閉房間與共乘選擇' : '開放房間與共乘選擇'}</button></section><div class="resource-grid" style="margin-top:14px"><section class="panel"><div class="resource-head"><h3>房間名額</h3></div>${rooms.map(room => `<div class="resource row"><label>${escapeHtml(room.name)}</label><span class="right"><input class="capacity-input" type="number" min="1" value="${room.capacity}" data-table="rooms" data-id="${room.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無房間。</p>'}<form id="add-room-form"><div class="field"><label>新增房間（房名｜床位數）</label><div class="row"><input name="name" required placeholder="山景四人房"><input name="capacity" type="number" min="1" required placeholder="4"><button class="button" type="submit">新增</button></div></div></form></section><section class="panel"><div class="resource-head"><h3>共乘車輛</h3></div>${vehicles.map(vehicle => `<div class="resource row"><label>${escapeHtml(vehicle.name)}・${escapeHtml(vehicle.driver_name || '')}</label><span class="right"><input class="capacity-input" type="number" min="0" value="${vehicle.seats}" data-table="vehicles" data-id="${vehicle.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無車輛。</p>'}<form id="add-vehicle-form"><div class="field"><label>新增車輛</label><input name="name" required placeholder="小美的車"><input name="driver_name" required placeholder="駕駛姓名"><div class="row"><input name="seats" type="number" min="0" required placeholder="乘客座位"><input name="departure" placeholder="出發地"><button class="button" type="submit">新增</button></div></div></form></section></div><div id="invite-result"></div>`;
   document.querySelector('#settings-back').addEventListener('click', renderAdmin);
+  document.querySelector('#copy-registration-data').addEventListener('click', async () => {
+    const clipboardCell = value => {
+      const text = String(value ?? '').replace(/[\t\r\n]/g, ' ');
+      return /^[=+\-@]/.test(text) ? `'${text}` : text;
+    };
+    const tsv = [registrationHeaders, ...registrationData].map(row => row.map(clipboardCell).join('\t')).join('\n');
+    try {
+      await navigator.clipboard.writeText(tsv);
+      showToast('已複製報名資料，可貼至試算表');
+    } catch {
+      showToast('複製失敗，請確認瀏覽器剪貼簿權限');
+    }
+  });
   document.querySelector('#toggle-resources').addEventListener('click', async () => {
     const { error } = await db.from('events').update({ resource_selection_open: !event.resource_selection_open }).eq('id', eventId);
     if (error) return fail(error);
