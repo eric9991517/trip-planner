@@ -13,6 +13,14 @@ let activeEvent;
 let bootstrapping = false;
 let passwordRecovery = false;
 
+const bootstrapObserver = new MutationObserver(() => {
+  app.querySelectorAll('.button').forEach(button => button.classList.add('btn', button.classList.contains('secondary') ? 'btn-outline-success' : 'btn-success'));
+  app.querySelectorAll('.field input:not([type="checkbox"]), .field select, .field textarea').forEach(field => field.classList.add('form-control'));
+  app.querySelectorAll('.panel').forEach(panel => panel.classList.add('card'));
+  app.querySelectorAll('.event-card').forEach(card => card.classList.add('card'));
+});
+bootstrapObserver.observe(app, { childList: true, subtree: true });
+
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const dateText = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }) : '';
 const localDateInputMax = () => { const now = new Date(); return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
