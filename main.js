@@ -11,6 +11,7 @@ let profile;
 let visibleEvents = [];
 let activeEvent;
 let bootstrapping = false;
+let passwordRecovery = false;
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const dateText = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }) : '';
@@ -25,15 +26,17 @@ if (!config.supabaseUrl || !config.supabaseAnonKey) {
 }
 
 async function start() {
-  const { data: { session } } = await db.auth.getSession();
-  user = session?.user || null;
   db.auth.onAuthStateChange((event, nextSession) => {
     user = nextSession?.user || null;
-    if (event === 'PASSWORD_RECOVERY') setTimeout(() => renderPasswordRecovery(), 0);
-    else if (user) setTimeout(loadAuthenticatedApp, 0);
+    if (event === 'PASSWORD_RECOVERY') { passwordRecovery = true; setTimeout(() => renderPasswordRecovery(), 0); }
+    else if (user) { if (!passwordRecovery) setTimeout(loadAuthenticatedApp, 0); }
     else { profile = null; account.innerHTML = ''; renderAuth(); }
   });
-  if (user) await loadAuthenticatedApp(); else renderAuth();
+  const { data: { session } } = await db.auth.getSession();
+  user = session?.user || null;
+  if (passwordRecovery) renderPasswordRecovery();
+  else if (user) await loadAuthenticatedApp();
+  else renderAuth();
 }
 
 async function loadAuthenticatedApp() {
@@ -99,6 +102,8 @@ function renderPasswordRecovery(message = '') {
       const { error } = await db.auth.updateUser({ password });
       if (error) throw error;
       await db.auth.signOut();
+      passwordRecovery = false;
+      history.replaceState({}, '', `${location.pathname}${location.search}`);
       renderAuth(false, '密碼已更新，請使用新密碼登入。');
     } catch (error) { renderPasswordRecovery(error.message || '更新密碼失敗，請重新寄送重設信。'); }
   });
