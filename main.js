@@ -109,20 +109,23 @@ function renderPasswordRecovery(message = '') {
 async function loadApp() {
   app.innerHTML = '<div class="loading">載入活動資料…</div>';
   try {
-    const [{ data: profileData, error: profileError }, { data: events, error: eventsError }, { data: memberships, error: membersError }] = await Promise.all([
+    const [{ data: profileData, error: profileError }, { data: events, error: eventsError }, { data: memberships, error: membersError }, { data: registrationCounts, error: countsError }] = await Promise.all([
       db.from('profiles').select('*').eq('id', user.id).single(),
       db.from('events').select('*').eq('published', true).order('starts_on'),
-      db.from('event_members').select('event_id,status').eq('user_id', user.id)
+      db.from('event_members').select('event_id,status').eq('user_id', user.id),
+      db.rpc('published_event_registration_counts')
     ]);
     if (profileError) throw profileError;
     if (eventsError) throw eventsError;
     if (membersError) throw membersError;
+    if (countsError) throw countsError;
     profile = profileData;
     visibleEvents = events || [];
     account.innerHTML = `<div class="right"><span class="user-email">${escapeHtml(profile.full_name || user.email)}${profile.role !== 'member' ? ` · ${profile.role === 'owner' ? '擁有人' : '管理者'}` : ''}</span><button class="button secondary" id="sign-out">登出</button></div>`;
     document.querySelector('#sign-out').addEventListener('click', () => db.auth.signOut());
     const memberEventIds = new Set((memberships || []).map(item => item.event_id));
-    renderOverview(memberEventIds);
+    const registrationCountByEvent = new Map((registrationCounts || []).map(item => [item.event_id, Number(item.registered_count)]));
+    renderOverview(memberEventIds, registrationCountByEvent);
   } catch (error) { app.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`; }
 }
 
@@ -135,12 +138,13 @@ async function redeemInvite() {
   showToast('邀請已確認，活動已加入你的總覽');
 }
 
-function renderOverview(memberEventIds) {
+function renderOverview(memberEventIds, registrationCountByEvent) {
   const manager = ['owner', 'admin'].includes(profile.role);
   const cards = visibleEvents.map(event => {
     const invited = memberEventIds.has(event.id);
     const canOpen = invited || manager;
-    return `<article class="event-card"><div class="cover ${event.event_type === 'international' ? 'foreign' : ''}"><span class="pill">${event.event_type === 'international' ? '國外旅行' : '國內旅行'}</span></div><div class="event-info"><h3>${escapeHtml(event.title)}</h3><p>${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</p><div class="event-foot"><span class="pill ${invited ? '' : 'locked'}">${invited ? '✓ 已受邀' : manager ? '管理者檢視' : '尚未受邀'}</span><button class="link-button open-event" data-id="${event.id}" ${canOpen ? '' : 'disabled'}>${canOpen ? '查看活動 →' : '未收到邀請'}</button></div>${!invited && !manager ? '<p class="small invite-note">此活動採邀請制，請向擁有人索取邀請連結；不能直接申請加入。</p>' : ''}</div></article>`;
+    const registeredCount = registrationCountByEvent.get(event.id) || 0;
+    return `<article class="event-card"><div class="cover ${event.event_type === 'international' ? 'foreign' : ''}"><span class="pill">${event.event_type === 'international' ? '國外旅行' : '國內旅行'}</span></div><div class="event-info"><h3>${escapeHtml(event.title)}</h3><p>${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</p><p class="small">目前 ${registeredCount} 人已登記參加</p><div class="event-foot"><span class="pill ${invited ? '' : 'locked'}">${invited ? '✓ 已受邀' : manager ? '管理者檢視' : '尚未受邀'}</span><button class="link-button open-event" data-id="${event.id}" ${canOpen ? '' : 'disabled'}>${canOpen ? '查看活動 →' : '未收到邀請'}</button></div>${!invited && !manager ? '<p class="small invite-note">此活動採邀請制，請向擁有人索取邀請連結；不能直接申請加入。</p>' : ''}</div></article>`;
   }).join('');
   app.innerHTML = `<div class="page-head"><div><div class="eyebrow">好友旅行　/　活動總覽</div><h1>看看最近有哪些行程</h1><div class="sub">你可以瀏覽所有活動；收到邀請後才能報名參加。</div></div></div><div class="count-banner"><strong>${visibleEvents.length}</strong><span>目前共有 ${visibleEvents.length} 個活動<br>活動採邀請制，只有收到邀請的成員可以進入報名。</span></div>${cards ? `<div class="event-grid">${cards}</div>` : '<div class="empty">目前沒有開放檢視的活動。</div>'}`;
   document.querySelectorAll('.open-event').forEach(button => button.addEventListener('click', () => openEvent(button.dataset.id)));
@@ -228,8 +232,13 @@ function renderEvent(event, membership, rooms, vehicles, roster, manager) {
         if (attendanceError) throw attendanceError;
       }
       profile = { ...profile, ...values, age: Number(values.age) };
-      showToast(event.registration_open ? '基本資料與報名意願已儲存' : '個人資料已儲存');
-      await openEvent(event.id);
+      if (event.registration_open && ['attending', 'not_attending'].includes(values.attendance)) {
+        showToast('已登記完成');
+        await loadApp();
+      } else {
+        showToast('個人資料已儲存');
+        await openEvent(event.id);
+      }
     } catch (error) { fail(error); }
   });
   wireInsurance();
@@ -255,7 +264,7 @@ async function renderAdmin() {
   const [{ error: memberError }, roleResult] = await Promise.all([db.from('profiles').select('id').limit(1), profilesQuery]);
   if (memberError) return fail(memberError);
   const people = (roleResult.data || []).filter(item => item.id !== user.id).map(item => `<div class="member-row"><span>${escapeHtml(item.full_name || '未填姓名')}　<span class="small">${escapeHtml(item.role)}</span></span><span class="right">${profile.role === 'owner' ? `<select class="role-select" data-user="${item.id}"><option value="member" ${item.role === 'member' ? 'selected' : ''}>團員</option><option value="admin" ${item.role === 'admin' ? 'selected' : ''}>管理者</option></select><button class="link-button save-role" data-user="${item.id}">儲存</button>` : ''}</span></div>`).join('');
-  app.innerHTML = `<div class="page-head"><div><div class="eyebrow">系統管理　/　管理者專區</div><h1>管理後台</h1><div class="sub">先收集參加意願，再設定房間、車輛並開放第二階段。</div></div><button class="button secondary" id="admin-back">返回活動總覽</button></div><div class="tabs"><button class="tab active">活動管理</button></div><section class="panel"><h2 style="font-size:17px;margin-top:0">新增活動｜第一階段</h2><form id="event-form"><div class="field-grid"><div class="field"><label>活動名稱</label><input name="title" required></div><div class="field"><label>國內／國外</label><select name="event_type"><option value="domestic">國內</option><option value="international">國外</option></select></div><div class="field"><label>目的地</label><input name="destination" required></div><div class="field"><label>報名階段</label><select name="registration_open"><option value="true">開放基本資料與參加意願</option><option value="false">暫不開放報名</option></select></div><div class="field"><label>開始日期</label><input name="starts_on" type="date" required></div><div class="field"><label>結束日期</label><input name="ends_on" type="date" required></div></div><div class="field"><label>活動說明</label><textarea name="description"></textarea></div><label class="field"><span><input type="checkbox" name="insurance_enabled"> 提供國外團體旅平險方案</span></label><div class="field-grid" id="insurance-settings"><div class="field"><label>保額（萬元）</label><input name="insurance_coverage" type="number" value="500" min="1"></div><div class="field"><label>保費（元／人）</label><input name="insurance_premium" type="number" value="380" min="0"></div></div><p class="small">此階段不設定車輛與房間；待團員回覆後再進入「名額設定」安排第二階段。</p><button class="button" type="submit">建立活動</button></form></section><div class="section-title"><h2>現有活動</h2><span class="small">在此直接建立並分享邀請連結</span></div><section class="panel">${visibleEvents.map(event => `<div class="admin-event-row"><div class="member-row"><span>${escapeHtml(event.title)}　<span class="small">${event.event_type === 'international' ? '國外' : '國內'}・${event.resource_selection_open ? '房間／共乘開放中' : '等待第二階段'}・${event.published ? '公開顯示' : '草稿'}</span></span><span class="right"><label class="invite-uses-label">可用人數<input class="invite-uses" type="number" min="1" max="100" value="1" data-id="${event.id}" aria-label="${escapeHtml(event.title)} 邀請連結可用人數"></label><button class="button quick-invite" data-id="${event.id}" ${event.registration_open ? '' : 'disabled'}>${event.registration_open ? '建立邀請連結' : '報名未開放'}</button><button class="link-button manage-event" data-id="${event.id}">名額設定</button></span></div><div class="invite-result" id="invite-result-${event.id}"></div></div>`).join('') || '<p class="small">尚未建立活動。</p>'}</section>${profile.role === 'owner' ? `<div class="section-title"><h2>管理者權限</h2></div><section class="panel"><p class="small">只有系統擁有人可以指派或移除管理者；管理者不能再指派其他管理者。</p>${people || '<p class="small">尚無其他使用者。</p>'}</section>` : ''}`;
+  app.innerHTML = `<div class="page-head"><div><div class="eyebrow">系統管理　/　管理者專區</div><h1>管理後台</h1><div class="sub">先收集參加意願，再設定房間、車輛並開放第二階段。</div></div><button class="button secondary" id="admin-back">返回活動總覽</button></div><div class="tabs"><button class="tab active">活動管理</button></div><section class="panel"><h2 style="font-size:17px;margin-top:0">新增活動｜第一階段</h2><form id="event-form"><div class="field-grid"><div class="field"><label>活動名稱</label><input name="title" required></div><div class="field"><label>國內／國外</label><select name="event_type"><option value="domestic">國內</option><option value="international">國外</option></select></div><div class="field"><label>目的地</label><input name="destination" required></div><div class="field"><label>報名階段</label><select name="registration_open"><option value="true">開放基本資料與參加意願</option><option value="false">暫不開放報名</option></select></div><div class="field"><label>開始日期</label><input name="starts_on" type="date" required></div><div class="field"><label>結束日期</label><input name="ends_on" type="date" required></div></div><div class="field"><label>活動說明</label><textarea name="description"></textarea></div><label class="field"><span><input type="checkbox" name="insurance_enabled"> 提供國外團體旅平險方案</span></label><div class="field-grid" id="insurance-settings"><div class="field"><label>保額（萬元）</label><input name="insurance_coverage" type="number" value="500" min="1"></div><div class="field"><label>保費（元／人）</label><input name="insurance_premium" type="number" value="380" min="0"></div></div><p class="small">此階段不設定車輛與房間；待團員回覆後再進入「名額設定」安排第二階段。</p><button class="button" type="submit">建立活動</button></form></section><div class="section-title"><h2>現有活動</h2><span class="small">在此直接建立並分享邀請連結</span></div><section class="panel">${visibleEvents.map(event => `<div class="admin-event-row"><div class="member-row"><span>${escapeHtml(event.title)}　<span class="small">${event.event_type === 'international' ? '國外' : '國內'}・${event.resource_selection_open ? '房間／共乘開放中' : '等待第二階段'}・${event.published ? '公開顯示' : '草稿'}</span></span><span class="right"><button class="button quick-invite" data-id="${event.id}" ${event.registration_open ? '' : 'disabled'}>${event.registration_open ? '建立不限人數邀請連結' : '報名未開放'}</button><button class="link-button manage-event" data-id="${event.id}">名額設定</button></span></div><div class="invite-result" id="invite-result-${event.id}"></div></div>`).join('') || '<p class="small">尚未建立活動。</p>'}</section>${profile.role === 'owner' ? `<div class="section-title"><h2>管理者權限</h2></div><section class="panel"><p class="small">只有系統擁有人可以指派或移除管理者；管理者不能再指派其他管理者。</p>${people || '<p class="small">尚無其他使用者。</p>'}</section>` : ''}`;
   document.querySelector('#admin-back').addEventListener('click', loadApp);
   document.querySelector('#event-form').addEventListener('submit', createEvent);
   document.querySelectorAll('.save-role').forEach(button => button.addEventListener('click', async () => {
@@ -267,12 +276,11 @@ async function renderAdmin() {
   document.querySelectorAll('.manage-event').forEach(button => button.addEventListener('click', () => renderEventSettings(button.dataset.id)));
   document.querySelectorAll('.quick-invite').forEach(button => button.addEventListener('click', async () => {
     const eventId = button.dataset.id;
-    const uses = Math.max(1, Math.min(100, Number(document.querySelector(`.invite-uses[data-id="${eventId}"]`).value)));
-    const { data: token, error } = await db.rpc('create_invitation', { p_event_id: eventId, p_max_uses: uses });
+    const { data: token, error } = await db.rpc('create_invitation', { p_event_id: eventId });
     if (error) return fail(error);
     const link = `${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;
     const result = document.querySelector(`#invite-result-${eventId}`);
-    result.innerHTML = `<section class="invite-link-panel"><strong>邀請連結已建立</strong><p class="small">可供 ${uses} 位朋友使用，30 天後失效。請只分享給預期受邀者。</p><div class="row"><input readonly value="${escapeHtml(link)}" aria-label="邀請連結"><button class="button copy-invite" type="button">複製連結</button></div></section>`;
+    result.innerHTML = `<section class="invite-link-panel"><strong>邀請連結已建立</strong><p class="small">不限人數使用，30 天後失效。請只分享給預期受邀者。</p><div class="row"><input readonly value="${escapeHtml(link)}" aria-label="邀請連結"><button class="button copy-invite" type="button">複製連結</button></div></section>`;
     result.querySelector('.copy-invite').addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(link); showToast('邀請連結已複製'); }
       catch { result.querySelector('input').select(); showToast('請複製已選取的邀請連結'); }
@@ -312,7 +320,7 @@ async function renderEventSettings(eventId) {
   }
   const profileNames = new Map(profiles.map(item => [item.id, item.full_name]));
   const attendanceNames = (members || []).map(item => `<div class="member-row"><span>${escapeHtml(profileNames.get(item.user_id) || '未填姓名')}</span><span class="small">${item.attendance_status === 'attending' ? '確定參加' : item.attendance_status === 'not_attending' ? '不參加' : '尚未回覆'}</span></div>`).join('') || '<p class="small">尚無受邀者回覆。</p>';
-  app.innerHTML = `<button class="link-button" id="settings-back">← 返回管理後台</button><div class="page-head"><div><div class="eyebrow">名額管理</div><h1>${escapeHtml(event.title)}</h1><div class="sub">先確認參加名單，再設定房間與車輛並開放第二階段。</div></div></div><section class="panel"><div class="row"><div><strong>建立邀請連結</strong><p class="small">可設定此連結允許幾位朋友使用。</p></div><span class="right"><input id="invite-uses" aria-label="邀請連結可使用人數" type="number" min="1" max="100" value="1"><button class="button" id="new-invite">建立連結</button></span></div></section><div class="section-title"><h2>第一階段｜報名意願</h2><span class="small">${members?.filter(item => item.attendance_status === 'attending').length || 0} 人確定參加</span></div><section class="panel">${attendanceNames}</section><div class="section-title"><h2>第二階段｜房間與共乘設定</h2></div><section class="panel"><p class="small">確認報名名單及車輛後，先新增房間／車輛，接著開放選位。開放後可另行通知團員。</p><button class="button ${event.resource_selection_open ? 'secondary' : ''}" id="toggle-resources">${event.resource_selection_open ? '關閉房間與共乘選擇' : '開放房間與共乘選擇'}</button></section><div class="resource-grid" style="margin-top:14px"><section class="panel"><div class="resource-head"><h3>房間名額</h3></div>${rooms.map(room => `<div class="resource row"><label>${escapeHtml(room.name)}</label><span class="right"><input class="capacity-input" type="number" min="1" value="${room.capacity}" data-table="rooms" data-id="${room.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無房間。</p>'}<form id="add-room-form"><div class="field"><label>新增房間（房名｜床位數）</label><div class="row"><input name="name" required placeholder="山景四人房"><input name="capacity" type="number" min="1" required placeholder="4"><button class="button" type="submit">新增</button></div></div></form></section><section class="panel"><div class="resource-head"><h3>共乘車輛</h3></div>${vehicles.map(vehicle => `<div class="resource row"><label>${escapeHtml(vehicle.name)}・${escapeHtml(vehicle.driver_name || '')}</label><span class="right"><input class="capacity-input" type="number" min="0" value="${vehicle.seats}" data-table="vehicles" data-id="${vehicle.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無車輛。</p>'}<form id="add-vehicle-form"><div class="field"><label>新增車輛</label><input name="name" required placeholder="小美的車"><input name="driver_name" required placeholder="駕駛姓名"><div class="row"><input name="seats" type="number" min="0" required placeholder="乘客座位"><input name="departure" placeholder="出發地"><button class="button" type="submit">新增</button></div></div></form></section></div><div id="invite-result"></div>`;
+  app.innerHTML = `<button class="link-button" id="settings-back">← 返回管理後台</button><div class="page-head"><div><div class="eyebrow">名額管理</div><h1>${escapeHtml(event.title)}</h1><div class="sub">先確認參加名單，再設定房間與車輛並開放第二階段。</div></div></div><section class="panel"><div class="row"><div><strong>建立邀請連結</strong><p class="small">此連結不限人數使用。</p></div><span class="right"><button class="button" id="new-invite">建立連結</button></span></div></section><div class="section-title"><h2>第一階段｜報名意願</h2><span class="small">${members?.filter(item => item.attendance_status === 'attending').length || 0} 人確定參加</span></div><section class="panel">${attendanceNames}</section><div class="section-title"><h2>第二階段｜房間與共乘設定</h2></div><section class="panel"><p class="small">確認報名名單及車輛後，先新增房間／車輛，接著開放選位。開放後可另行通知團員。</p><button class="button ${event.resource_selection_open ? 'secondary' : ''}" id="toggle-resources">${event.resource_selection_open ? '關閉房間與共乘選擇' : '開放房間與共乘選擇'}</button></section><div class="resource-grid" style="margin-top:14px"><section class="panel"><div class="resource-head"><h3>房間名額</h3></div>${rooms.map(room => `<div class="resource row"><label>${escapeHtml(room.name)}</label><span class="right"><input class="capacity-input" type="number" min="1" value="${room.capacity}" data-table="rooms" data-id="${room.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無房間。</p>'}<form id="add-room-form"><div class="field"><label>新增房間（房名｜床位數）</label><div class="row"><input name="name" required placeholder="山景四人房"><input name="capacity" type="number" min="1" required placeholder="4"><button class="button" type="submit">新增</button></div></div></form></section><section class="panel"><div class="resource-head"><h3>共乘車輛</h3></div>${vehicles.map(vehicle => `<div class="resource row"><label>${escapeHtml(vehicle.name)}・${escapeHtml(vehicle.driver_name || '')}</label><span class="right"><input class="capacity-input" type="number" min="0" value="${vehicle.seats}" data-table="vehicles" data-id="${vehicle.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無車輛。</p>'}<form id="add-vehicle-form"><div class="field"><label>新增車輛</label><input name="name" required placeholder="小美的車"><input name="driver_name" required placeholder="駕駛姓名"><div class="row"><input name="seats" type="number" min="0" required placeholder="乘客座位"><input name="departure" placeholder="出發地"><button class="button" type="submit">新增</button></div></div></form></section></div><div id="invite-result"></div>`;
   document.querySelector('#settings-back').addEventListener('click', renderAdmin);
   document.querySelector('#toggle-resources').addEventListener('click', async () => {
     const { error } = await db.from('events').update({ resource_selection_open: !event.resource_selection_open }).eq('id', eventId);
@@ -345,10 +353,13 @@ async function renderEventSettings(eventId) {
     showToast('名額已更新');
   }));
   document.querySelector('#new-invite').addEventListener('click', async () => {
-    const { data: token, error } = await db.rpc('create_invitation', { p_event_id: eventId, p_max_uses: Math.max(1, Math.min(100, Number(document.querySelector('#invite-uses').value))) });
+    const { data: token, error } = await db.rpc('create_invitation', { p_event_id: eventId });
     if (error) return fail(error);
     const link = `${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;
-    document.querySelector('#invite-result').innerHTML = `<section class="panel" style="margin-top:14px"><strong>邀請連結已建立</strong><p class="small">連結可供 ${escapeHtml(document.querySelector('#invite-uses').value)} 位朋友使用；每位受邀者完成註冊後會加入此活動。</p><div class="row"><input id="invite-link" readonly value="${escapeHtml(link)}"><button class="button" id="copy-invite">複製連結</button></div></section>`;
-    document.querySelector('#copy-invite').addEventListener('click', async () => { await navigator.clipboard.writeText(link); showToast('邀請連結已複製'); });
+    document.querySelector('#invite-result').innerHTML = `<section class="panel" style="margin-top:14px"><strong>邀請連結已建立</strong><p class="small">不限人數使用，30 天後失效；每位受邀者完成註冊後會加入此活動。</p><div class="row"><input id="invite-link" readonly value="${escapeHtml(link)}"><button class="button" id="copy-invite">複製連結</button></div></section>`;
+    document.querySelector('#copy-invite').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(link); showToast('邀請連結已複製'); }
+      catch { document.querySelector('#invite-link').select(); showToast('請複製已選取的邀請連結'); }
+    });
   });
 }
