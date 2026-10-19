@@ -104,9 +104,11 @@ async function redeemInvite() {
 }
 
 function renderOverview(memberEventIds) {
+  const manager = ['owner', 'admin'].includes(profile.role);
   const cards = visibleEvents.map(event => {
     const invited = memberEventIds.has(event.id);
-    return `<article class="event-card"><div class="cover ${event.event_type === 'international' ? 'foreign' : ''}"><span class="pill">${event.event_type === 'international' ? '國外旅行' : '國內旅行'}</span></div><div class="event-info"><h3>${escapeHtml(event.title)}</h3><p>${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</p><div class="event-foot"><span class="pill ${invited ? '' : 'locked'}">${invited ? '✓ 已受邀' : '尚未受邀'}</span><button class="link-button open-event" data-id="${event.id}" ${invited ? '' : 'disabled'}>${invited ? '查看活動 →' : '未收到邀請'}</button></div></div></article>`;
+    const canOpen = invited || manager;
+    return `<article class="event-card"><div class="cover ${event.event_type === 'international' ? 'foreign' : ''}"><span class="pill">${event.event_type === 'international' ? '國外旅行' : '國內旅行'}</span></div><div class="event-info"><h3>${escapeHtml(event.title)}</h3><p>${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</p><div class="event-foot"><span class="pill ${invited ? '' : 'locked'}">${invited ? '✓ 已受邀' : manager ? '管理者檢視' : '尚未受邀'}</span><button class="link-button open-event" data-id="${event.id}" ${canOpen ? '' : 'disabled'}>${canOpen ? '查看活動 →' : '未收到邀請'}</button></div></div></article>`;
   }).join('');
   app.innerHTML = `<div class="page-head"><div><div class="eyebrow">好友旅行　/　活動總覽</div><h1>看看最近有哪些行程</h1><div class="sub">你可以瀏覽所有活動；收到邀請後才能報名參加。</div></div></div><div class="count-banner"><strong>${visibleEvents.length}</strong><span>目前共有 ${visibleEvents.length} 個活動<br>活動採邀請制，只有收到邀請的成員可以進入報名。</span></div>${cards ? `<div class="event-grid">${cards}</div>` : '<div class="empty">目前沒有開放檢視的活動。</div>'}`;
   document.querySelectorAll('.open-event').forEach(button => button.addEventListener('click', () => openEvent(button.dataset.id)));
@@ -124,39 +126,58 @@ function addAdminLink() {
 async function openEvent(eventId) {
   try {
     const event = visibleEvents.find(item => item.id === eventId);
-    const [{ data: membership, error: membershipError }, { data: rooms, error: roomError }, { data: vehicles, error: vehicleError }, { data: roster, error: rosterError }] = await Promise.all([
+    const manager = ['owner', 'admin'].includes(profile.role);
+    const [{ data: membership, error: membershipError }, { data: rooms, error: roomError }, { data: vehicles, error: vehicleError }] = await Promise.all([
       db.from('event_members').select('*').eq('event_id', eventId).eq('user_id', user.id).eq('status', 'registered').maybeSingle(),
       db.from('rooms').select('*').eq('event_id', eventId).order('created_at'),
-      db.from('vehicles').select('*').eq('event_id', eventId).order('created_at'),
-      db.rpc('resource_roster', { p_event_id: eventId })
+      db.from('vehicles').select('*').eq('event_id', eventId).order('created_at')
     ]);
     if (membershipError) throw membershipError;
     if (roomError) throw roomError;
     if (vehicleError) throw vehicleError;
-    if (rosterError) throw rosterError;
-    if (!membership) return showToast('只有收到此活動邀請的成員可以進入。');
+    if (!membership && !manager) return showToast('只有收到此活動邀請的成員可以進入。');
+    const showResources = event.resource_selection_open && (manager || membership?.attendance_status === 'attending');
+    let roster = [];
+    if (showResources) {
+      const { data, error } = await db.rpc('resource_roster', { p_event_id: eventId });
+      if (error) throw error;
+      roster = data || [];
+    }
     activeEvent = event;
-    renderEvent(event, membership, rooms || [], vehicles || [], roster || []);
+    renderEvent(event, membership, rooms || [], vehicles || [], roster, manager);
   } catch (error) { fail(error); }
 }
 
-function renderEvent(event, membership, rooms, vehicles, roster) {
+function renderEvent(event, membership, rooms, vehicles, roster, manager) {
+  const attending = membership?.attendance_status === 'attending';
+  const canSelectResources = attending && event.resource_selection_open;
   const roomMap = new Map();
   const vehicleMap = new Map();
   roster.forEach(item => (item.resource_type === 'room' ? roomMap : vehicleMap).set(item.resource_id, [...((item.resource_type === 'room' ? roomMap : vehicleMap).get(item.resource_id) || []), item.full_name]));
   const roomCards = rooms.map(room => {
     const names = roomMap.get(room.id) || [];
     const remaining = Math.max(0, room.capacity - names.length);
-    return `<div class="resource"><div class="row"><span class="resource-name">${escapeHtml(room.name)}</span><span class="meta">${remaining ? `還有 ${remaining} 位` : '已滿房'}</span></div><div class="bar"><span style="width:${Math.min(100, names.length / room.capacity * 100)}%"></span></div><div class="row"><span class="member-list">${names.length ? `已選：${names.map(escapeHtml).join('、')}` : '目前尚無團員'}</span><button class="select-button reserve" data-type="room" data-id="${room.id}" ${remaining ? '' : 'disabled'}>${remaining ? '選這間' : '已滿房'}</button></div></div>`;
+    return `<div class="resource"><div class="row"><span class="resource-name">${escapeHtml(room.name)}</span><span class="meta">${remaining ? `還有 ${remaining} 位` : '已滿房'}</span></div><div class="bar"><span style="width:${Math.min(100, names.length / room.capacity * 100)}%"></span></div><div class="row"><span class="member-list">${names.length ? `已選：${names.map(escapeHtml).join('、')}` : '目前尚無團員'}</span>${canSelectResources ? `<button class="select-button reserve" data-type="room" data-id="${room.id}" ${remaining ? '' : 'disabled'}>${remaining ? '選這間' : '已滿房'}</button>` : ''}</div></div>`;
   }).join('') || '<p class="small">管理者尚未設定房間。</p>';
   const carCards = vehicles.map(vehicle => {
     const names = vehicleMap.get(vehicle.id) || [];
     const remaining = Math.max(0, vehicle.seats - names.length);
-    return `<div class="resource"><div class="row"><span class="resource-name">${escapeHtml(vehicle.name)}</span><span class="meta">${remaining ? `還有 ${remaining} 位` : '座位已滿'}</span></div><div class="meta">駕駛・${escapeHtml(vehicle.driver_name || '')}　${escapeHtml(vehicle.departure || '')}</div><div class="bar"><span style="width:${vehicle.seats ? Math.min(100, names.length / vehicle.seats * 100) : 100}%"></span></div><div class="row"><span class="member-list">${names.length ? `已選：${names.map(escapeHtml).join('、')}` : '目前尚無乘客'}</span><button class="select-button reserve" data-type="vehicle" data-id="${vehicle.id}" ${remaining ? '' : 'disabled'}>${remaining ? '選這台' : '座位已滿'}</button></div></div>`;
+    return `<div class="resource"><div class="row"><span class="resource-name">${escapeHtml(vehicle.name)}</span><span class="meta">${remaining ? `還有 ${remaining} 位` : '座位已滿'}</span></div><div class="meta">駕駛・${escapeHtml(vehicle.driver_name || '')}　${escapeHtml(vehicle.departure || '')}</div><div class="bar"><span style="width:${vehicle.seats ? Math.min(100, names.length / vehicle.seats * 100) : 100}%"></span></div><div class="row"><span class="member-list">${names.length ? `已選：${names.map(escapeHtml).join('、')}` : '目前尚無乘客'}</span>${canSelectResources ? `<button class="select-button reserve" data-type="vehicle" data-id="${vehicle.id}" ${remaining ? '' : 'disabled'}>${remaining ? '選這台' : '座位已滿'}</button>` : ''}</div></div>`;
   }).join('') || '<p class="small">管理者尚未設定共乘車輛。</p>';
   const foreign = event.event_type === 'international';
-  app.innerHTML = `<button class="link-button" id="back">← 返回活動總覽</button><div class="page-head"><div><div class="eyebrow">${foreign ? '國外旅行' : '國內旅行'}　/　已受邀</div><h1>${escapeHtml(event.title)}</h1><div class="sub">${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</div></div><span class="pill">${event.registration_open ? '報名中' : '報名已截止'}</span></div><div class="stat-grid"><div class="stat"><span>已選房或共乘</span><strong>${new Set(roster.map(r => r.user_id)).size}</strong></div><div class="stat"><span>房間名額</span><strong>${rooms.reduce((sum, item) => sum + item.capacity, 0)}</strong></div><div class="stat"><span>共乘座位</span><strong>${vehicles.reduce((sum, item) => sum + item.seats, 0)}</strong></div></div><div class="section-title"><h2>選擇你的房間與共乘</h2><span class="small">名額由活動管理者設定・先選先得</span></div><div class="resource-grid"><section class="panel"><div class="resource-head"><h3>⌂　房間選擇</h3></div>${roomCards}</section><section class="panel"><div class="resource-head"><h3>▱　共乘安排</h3></div>${carCards}</section></div>${foreign ? insuranceForm(event, membership) : ''}<div class="section-title"><h2>個人資料</h2><span class="small">本次活動資料僅本人與管理者可查看</span></div><section class="panel"><form id="profile-form"><div class="field-grid"><div class="field"><label>中文全名</label><input name="full_name" required value="${escapeHtml(profile.full_name || '')}"></div><div class="field"><label>護照英文姓名 ${foreign ? '（必填）' : '（選填）'}</label><input name="passport_english_name" ${foreign ? 'required' : ''} value="${escapeHtml(membership.passport_english_name || profile.passport_english_name || '')}"></div><div class="field"><label>電話</label><input name="phone" required value="${escapeHtml(membership.phone || profile.phone || '')}"></div><div class="field"><label>年齡</label><input name="age" type="number" min="0" max="120" required value="${escapeHtml(membership.age ?? profile.age ?? '')}"></div></div><button class="button" type="submit">儲存本次資料</button></form></section>`;
+  const responsePanel = membership ? `<section class="panel"><div class="row"><div><strong>第一階段｜基本資料與報名意願</strong><p class="small">${membership.attendance_status === 'attending' ? '已回覆參加' : membership.attendance_status === 'not_attending' ? '已回覆不參加' : '請先填寫資料並回覆是否參加。'}</p></div><span class="right">${event.registration_open ? `<button class="button respond" data-attending="true">我要參加</button><button class="button secondary respond" data-attending="false">暫不參加</button>` : '<span class="small">報名已截止</span>'}</span></div></section>` : '';
+  const resourceStage = event.resource_selection_open && (manager || attending)
+    ? `<div class="section-title"><h2>第二階段｜選擇房間與共乘</h2><span class="small">名額由管理者設定・先選先得</span></div><div class="stat-grid"><div class="stat"><span>已選房或共乘</span><strong>${new Set(roster.map(r => r.user_id)).size}</strong></div><div class="stat"><span>房間名額</span><strong>${rooms.reduce((sum, item) => sum + item.capacity, 0)}</strong></div><div class="stat"><span>共乘座位</span><strong>${vehicles.reduce((sum, item) => sum + item.seats, 0)}</strong></div></div><div class="resource-grid"><section class="panel"><div class="resource-head"><h3>⌂　房間選擇</h3></div>${roomCards}</section><section class="panel"><div class="resource-head"><h3>▱　共乘安排</h3></div>${carCards}</section></div>`
+    : `<section class="panel"><strong>第二階段｜房間與共乘</strong><p class="small">${manager ? '尚未開放。請先收集報名意願，再於管理後台設定房間／車輛並開放選擇。' : attending ? '管理者確認參加名單與車輛後，會另行通知開放選擇。' : '請先回覆參加意願；房間與共乘將於第二階段開放。'}</p></section>`;
+  const profilePanel = membership ? `<div class="section-title"><h2>個人資料</h2><span class="small">本次活動資料僅本人與管理者可查看</span></div><section class="panel"><form id="profile-form"><div class="field-grid"><div class="field"><label>中文全名</label><input name="full_name" required value="${escapeHtml(profile.full_name || '')}"></div><div class="field"><label>護照英文姓名 ${foreign ? '（必填）' : '（選填）'}</label><input name="passport_english_name" ${foreign ? 'required' : ''} value="${escapeHtml(membership.passport_english_name || profile.passport_english_name || '')}"></div><div class="field"><label>電話</label><input name="phone" required value="${escapeHtml(membership.phone || profile.phone || '')}"></div><div class="field"><label>年齡</label><input name="age" type="number" min="0" max="120" required value="${escapeHtml(membership.age ?? profile.age ?? '')}"></div></div><button class="button" type="submit">儲存本次資料</button></form></section>${foreign ? insuranceForm(event, membership) : ''}` : `<section class="panel"><p class="small">管理者檢視模式。你可以查看活動內容與報名概況，不會以團員身分提交資料或選位。</p></section>`;
+  app.innerHTML = `<button class="link-button" id="back">← 返回活動總覽</button><div class="page-head"><div><div class="eyebrow">${foreign ? '國外旅行' : '國內旅行'}　/　${membership ? '已受邀' : '管理者檢視'}</div><h1>${escapeHtml(event.title)}</h1><div class="sub">${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</div></div><span class="pill">${event.registration_open ? '第一階段報名中' : '報名已截止'}</span></div>${responsePanel}${resourceStage}<div class="section-title"><h2>活動說明</h2></div><section class="panel"><p>${escapeHtml(event.description || '尚無活動說明。')}</p></section>${profilePanel}`;
   document.querySelector('#back').addEventListener('click', loadApp);
+  document.querySelectorAll('.respond').forEach(button => button.addEventListener('click', async () => {
+    const { error } = await db.rpc('respond_to_event', { p_event_id: event.id, p_attending: button.dataset.attending === 'true' });
+    if (error) return fail(error);
+    showToast(button.dataset.attending === 'true' ? '已回覆參加，第二階段開放後即可選位' : '已回覆暫不參加');
+    await openEvent(event.id);
+  }));
   document.querySelectorAll('.reserve').forEach(button => button.addEventListener('click', async () => {
     try {
       const rpc = button.dataset.type === 'room' ? 'choose_room' : 'choose_vehicle';
@@ -202,7 +223,7 @@ async function renderAdmin() {
   const [{ error: memberError }, roleResult] = await Promise.all([db.from('profiles').select('id').limit(1), profilesQuery]);
   if (memberError) return fail(memberError);
   const people = (roleResult.data || []).filter(item => item.id !== user.id).map(item => `<div class="member-row"><span>${escapeHtml(item.full_name || '未填姓名')}　<span class="small">${escapeHtml(item.role)}</span></span><span class="right">${profile.role === 'owner' ? `<select class="role-select" data-user="${item.id}"><option value="member" ${item.role === 'member' ? 'selected' : ''}>團員</option><option value="admin" ${item.role === 'admin' ? 'selected' : ''}>管理者</option></select><button class="link-button save-role" data-user="${item.id}">儲存</button>` : ''}</span></div>`).join('');
-  app.innerHTML = `<div class="page-head"><div><div class="eyebrow">系統管理　/　管理者專區</div><h1>管理後台</h1><div class="sub">房間、共乘名額與旅平險由管理者設定。</div></div><button class="button secondary" id="admin-back">返回活動總覽</button></div><div class="tabs"><button class="tab active">活動管理</button></div><section class="panel"><h2 style="font-size:17px;margin-top:0">新增活動</h2><form id="event-form"><div class="field-grid"><div class="field"><label>活動名稱</label><input name="title" required></div><div class="field"><label>國內／國外</label><select name="event_type"><option value="domestic">國內</option><option value="international">國外</option></select></div><div class="field"><label>目的地</label><input name="destination" required></div><div class="field"><label>報名截止前開放</label><select name="registration_open"><option value="true">報名中</option><option value="false">關閉報名</option></select></div><div class="field"><label>開始日期</label><input name="starts_on" type="date" required></div><div class="field"><label>結束日期</label><input name="ends_on" type="date" required></div></div><div class="field"><label>活動說明</label><textarea name="description"></textarea></div><label class="field"><span><input type="checkbox" name="insurance_enabled"> 提供國外團體旅平險方案</span></label><div class="field-grid" id="insurance-settings"><div class="field"><label>保額（萬元）</label><input name="insurance_coverage" type="number" value="500" min="1"></div><div class="field"><label>保費（元／人）</label><input name="insurance_premium" type="number" value="380" min="0"></div></div><div class="divider"></div><div class="field"><label>房間設定（每行：房名 | 床位數）</label><textarea name="rooms" placeholder="山景四人房 | 4&#10;雙人房 A | 2"></textarea></div><div class="field"><label>車輛設定（每行：車名 | 駕駛 | 乘客座位 | 出發地）</label><textarea name="vehicles" placeholder="小美的車 | 小美 | 4 | 台北"></textarea></div><button class="button" type="submit">建立活動</button></form></section><div class="section-title"><h2>現有活動</h2></div><section class="panel">${visibleEvents.map(event => `<div class="member-row"><span>${escapeHtml(event.title)}　<span class="small">${event.event_type === 'international' ? '國外' : '國內'}・${event.published ? '公開顯示' : '草稿'}</span></span><button class="link-button manage-event" data-id="${event.id}">名額設定</button></div>`).join('') || '<p class="small">尚未建立活動。</p>'}</section>${profile.role === 'owner' ? `<div class="section-title"><h2>管理者權限</h2></div><section class="panel"><p class="small">只有系統擁有人可以指派或移除管理者；管理者不能再指派其他管理者。</p>${people || '<p class="small">尚無其他使用者。</p>'}</section>` : ''}`;
+  app.innerHTML = `<div class="page-head"><div><div class="eyebrow">系統管理　/　管理者專區</div><h1>管理後台</h1><div class="sub">先收集參加意願，再設定房間、車輛並開放第二階段。</div></div><button class="button secondary" id="admin-back">返回活動總覽</button></div><div class="tabs"><button class="tab active">活動管理</button></div><section class="panel"><h2 style="font-size:17px;margin-top:0">新增活動｜第一階段</h2><form id="event-form"><div class="field-grid"><div class="field"><label>活動名稱</label><input name="title" required></div><div class="field"><label>國內／國外</label><select name="event_type"><option value="domestic">國內</option><option value="international">國外</option></select></div><div class="field"><label>目的地</label><input name="destination" required></div><div class="field"><label>報名階段</label><select name="registration_open"><option value="true">開放基本資料與參加意願</option><option value="false">暫不開放報名</option></select></div><div class="field"><label>開始日期</label><input name="starts_on" type="date" required></div><div class="field"><label>結束日期</label><input name="ends_on" type="date" required></div></div><div class="field"><label>活動說明</label><textarea name="description"></textarea></div><label class="field"><span><input type="checkbox" name="insurance_enabled"> 提供國外團體旅平險方案</span></label><div class="field-grid" id="insurance-settings"><div class="field"><label>保額（萬元）</label><input name="insurance_coverage" type="number" value="500" min="1"></div><div class="field"><label>保費（元／人）</label><input name="insurance_premium" type="number" value="380" min="0"></div></div><p class="small">此階段不設定車輛與房間；待團員回覆後再進入「名額設定」安排第二階段。</p><button class="button" type="submit">建立活動</button></form></section><div class="section-title"><h2>現有活動</h2></div><section class="panel">${visibleEvents.map(event => `<div class="member-row"><span>${escapeHtml(event.title)}　<span class="small">${event.event_type === 'international' ? '國外' : '國內'}・${event.resource_selection_open ? '房間／共乘開放中' : '等待第二階段'}・${event.published ? '公開顯示' : '草稿'}</span></span><button class="link-button manage-event" data-id="${event.id}">名額設定</button></div>`).join('') || '<p class="small">尚未建立活動。</p>'}</section>${profile.role === 'owner' ? `<div class="section-title"><h2>管理者權限</h2></div><section class="panel"><p class="small">只有系統擁有人可以指派或移除管理者；管理者不能再指派其他管理者。</p>${people || '<p class="small">尚無其他使用者。</p>'}</section>` : ''}`;
   document.querySelector('#admin-back').addEventListener('click', loadApp);
   document.querySelector('#event-form').addEventListener('submit', createEvent);
   document.querySelectorAll('.save-role').forEach(button => button.addEventListener('click', async () => {
@@ -217,16 +238,10 @@ async function renderAdmin() {
 async function createEvent(event) {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(event.currentTarget));
-  const roomLines = values.rooms.split('\n').map(line => line.trim()).filter(Boolean);
-  const vehicleLines = values.vehicles.split('\n').map(line => line.trim()).filter(Boolean);
   const insurance = event.currentTarget.elements.insurance_enabled.checked;
   try {
     const { data: created, error } = await db.from('events').insert({ title: values.title, event_type: values.event_type, destination: values.destination, starts_on: values.starts_on, ends_on: values.ends_on, description: values.description, registration_open: values.registration_open === 'true', insurance_enabled: values.event_type === 'international' && insurance, insurance_coverage: Number(values.insurance_coverage || 0), insurance_premium: Number(values.insurance_premium || 0), owner_user_id: user.id }).select().single();
     if (error) throw error;
-    const rooms = roomLines.map(line => { const [name, capacity] = line.split('|').map(value => value.trim()); return { event_id: created.id, name, capacity: Number(capacity) }; });
-    const vehicles = vehicleLines.map(line => { const [name, driver_name, seats, departure] = line.split('|').map(value => value.trim()); return { event_id: created.id, name, driver_name, seats: Number(seats), departure }; });
-    if (rooms.length) { const result = await db.from('rooms').insert(rooms); if (result.error) throw result.error; }
-    if (vehicles.length) { const result = await db.from('vehicles').insert(vehicles); if (result.error) throw result.error; }
     showToast('活動已建立');
     await loadApp();
   } catch (error) { fail(error); }
@@ -234,11 +249,48 @@ async function createEvent(event) {
 
 async function renderEventSettings(eventId) {
   const event = visibleEvents.find(item => item.id === eventId);
-  const [{ data: rooms, error: roomError }, { data: vehicles, error: vehicleError }] = await Promise.all([db.from('rooms').select('*').eq('event_id', eventId), db.from('vehicles').select('*').eq('event_id', eventId)]);
+  const [{ data: rooms, error: roomError }, { data: vehicles, error: vehicleError }, { data: members, error: membersError }] = await Promise.all([
+    db.from('rooms').select('*').eq('event_id', eventId).order('created_at'),
+    db.from('vehicles').select('*').eq('event_id', eventId).order('created_at'),
+    db.from('event_members').select('user_id,attendance_status').eq('event_id', eventId).eq('status', 'registered')
+  ]);
   if (roomError) return fail(roomError);
   if (vehicleError) return fail(vehicleError);
-  app.innerHTML = `<button class="link-button" id="settings-back">← 返回管理後台</button><div class="page-head"><div><div class="eyebrow">名額管理</div><h1>${escapeHtml(event.title)}</h1><div class="sub">房間與乘客名額只由管理者設定。</div></div></div><section class="panel"><div class="row"><div><strong>建立邀請連結</strong><p class="small">可設定此連結允許幾位朋友使用。</p></div><span class="right"><input id="invite-uses" aria-label="邀請連結可使用人數" type="number" min="1" max="100" value="1"><button class="button" id="new-invite">建立連結</button></span></div></section><div class="resource-grid" style="margin-top:14px"><section class="panel"><div class="resource-head"><h3>房間名額</h3></div>${rooms.map(room => `<div class="resource row"><label>${escapeHtml(room.name)}</label><span class="right"><input class="capacity-input" type="number" min="1" value="${room.capacity}" data-table="rooms" data-id="${room.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無房間。</p>'}</section><section class="panel"><div class="resource-head"><h3>共乘座位</h3></div>${vehicles.map(vehicle => `<div class="resource row"><label>${escapeHtml(vehicle.name)}・${escapeHtml(vehicle.driver_name || '')}</label><span class="right"><input class="capacity-input" type="number" min="0" value="${vehicle.seats}" data-table="vehicles" data-id="${vehicle.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無車輛。</p>'}</section></div><div id="invite-result"></div>`;
+  if (membersError) return fail(membersError);
+  const memberIds = (members || []).map(item => item.user_id);
+  let profiles = [];
+  if (memberIds.length) {
+    const { data, error } = await db.from('profiles').select('id,full_name').in('id', memberIds);
+    if (error) return fail(error);
+    profiles = data || [];
+  }
+  const profileNames = new Map(profiles.map(item => [item.id, item.full_name]));
+  const attendanceNames = (members || []).map(item => `<div class="member-row"><span>${escapeHtml(profileNames.get(item.user_id) || '未填姓名')}</span><span class="small">${item.attendance_status === 'attending' ? '確定參加' : item.attendance_status === 'not_attending' ? '不參加' : '尚未回覆'}</span></div>`).join('') || '<p class="small">尚無受邀者回覆。</p>';
+  app.innerHTML = `<button class="link-button" id="settings-back">← 返回管理後台</button><div class="page-head"><div><div class="eyebrow">名額管理</div><h1>${escapeHtml(event.title)}</h1><div class="sub">先確認參加名單，再設定房間與車輛並開放第二階段。</div></div></div><section class="panel"><div class="row"><div><strong>建立邀請連結</strong><p class="small">可設定此連結允許幾位朋友使用。</p></div><span class="right"><input id="invite-uses" aria-label="邀請連結可使用人數" type="number" min="1" max="100" value="1"><button class="button" id="new-invite">建立連結</button></span></div></section><div class="section-title"><h2>第一階段｜報名意願</h2><span class="small">${members?.filter(item => item.attendance_status === 'attending').length || 0} 人確定參加</span></div><section class="panel">${attendanceNames}</section><div class="section-title"><h2>第二階段｜房間與共乘設定</h2></div><section class="panel"><p class="small">確認報名名單及車輛後，先新增房間／車輛，接著開放選位。開放後可另行通知團員。</p><button class="button ${event.resource_selection_open ? 'secondary' : ''}" id="toggle-resources">${event.resource_selection_open ? '關閉房間與共乘選擇' : '開放房間與共乘選擇'}</button></section><div class="resource-grid" style="margin-top:14px"><section class="panel"><div class="resource-head"><h3>房間名額</h3></div>${rooms.map(room => `<div class="resource row"><label>${escapeHtml(room.name)}</label><span class="right"><input class="capacity-input" type="number" min="1" value="${room.capacity}" data-table="rooms" data-id="${room.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無房間。</p>'}<form id="add-room-form"><div class="field"><label>新增房間（房名｜床位數）</label><div class="row"><input name="name" required placeholder="山景四人房"><input name="capacity" type="number" min="1" required placeholder="4"><button class="button" type="submit">新增</button></div></div></form></section><section class="panel"><div class="resource-head"><h3>共乘車輛</h3></div>${vehicles.map(vehicle => `<div class="resource row"><label>${escapeHtml(vehicle.name)}・${escapeHtml(vehicle.driver_name || '')}</label><span class="right"><input class="capacity-input" type="number" min="0" value="${vehicle.seats}" data-table="vehicles" data-id="${vehicle.id}"><button class="link-button save-capacity">儲存</button></span></div>`).join('') || '<p class="small">尚無車輛。</p>'}<form id="add-vehicle-form"><div class="field"><label>新增車輛</label><input name="name" required placeholder="小美的車"><input name="driver_name" required placeholder="駕駛姓名"><div class="row"><input name="seats" type="number" min="0" required placeholder="乘客座位"><input name="departure" placeholder="出發地"><button class="button" type="submit">新增</button></div></div></form></section></div><div id="invite-result"></div>`;
   document.querySelector('#settings-back').addEventListener('click', renderAdmin);
+  document.querySelector('#toggle-resources').addEventListener('click', async () => {
+    const { error } = await db.from('events').update({ resource_selection_open: !event.resource_selection_open }).eq('id', eventId);
+    if (error) return fail(error);
+    visibleEvents = visibleEvents.map(item => item.id === eventId ? { ...item, resource_selection_open: !event.resource_selection_open } : item);
+    showToast(event.resource_selection_open ? '已關閉第二階段選位' : '第二階段選位已開放，請另行通知團員');
+    await renderEventSettings(eventId);
+  });
+  document.querySelector('#add-room-form').addEventListener('submit', async formEvent => {
+    formEvent.preventDefault();
+    const values = Object.fromEntries(new FormData(formEvent.currentTarget));
+    const { error } = await db.from('rooms').insert({ event_id: eventId, name: values.name.trim(), capacity: Number(values.capacity) });
+    if (error) return fail(error);
+    showToast('房間已新增');
+    await renderEventSettings(eventId);
+  });
+  document.querySelector('#add-vehicle-form').addEventListener('submit', async formEvent => {
+    formEvent.preventDefault();
+    const values = Object.fromEntries(new FormData(formEvent.currentTarget));
+    const { error } = await db.from('vehicles').insert({ event_id: eventId, name: values.name.trim(), driver_name: values.driver_name.trim(), seats: Number(values.seats), departure: values.departure.trim() });
+    if (error) return fail(error);
+    showToast('車輛已新增');
+    await renderEventSettings(eventId);
+  });
   document.querySelectorAll('.save-capacity').forEach(button => button.addEventListener('click', async () => {
     const input = button.previousElementSibling;
     const field = input.dataset.table === 'rooms' ? 'capacity' : 'seats';
