@@ -27,9 +27,10 @@ if (!config.supabaseUrl || !config.supabaseAnonKey) {
 async function start() {
   const { data: { session } } = await db.auth.getSession();
   user = session?.user || null;
-  db.auth.onAuthStateChange((_event, nextSession) => {
+  db.auth.onAuthStateChange((event, nextSession) => {
     user = nextSession?.user || null;
-    if (user) setTimeout(loadAuthenticatedApp, 0);
+    if (event === 'PASSWORD_RECOVERY') setTimeout(() => renderPasswordRecovery(), 0);
+    else if (user) setTimeout(loadAuthenticatedApp, 0);
     else { profile = null; account.innerHTML = ''; renderAuth(); }
   });
   if (user) await loadAuthenticatedApp(); else renderAuth();
@@ -51,8 +52,17 @@ async function loadAuthenticatedApp() {
 
 function renderAuth(register = false, message = '') {
   account.innerHTML = '';
-  app.innerHTML = `<section class="auth"><div class="panel"><div class="eyebrow">好友旅行</div><h1>${register ? '建立你的帳號' : '登入行程系統'}</h1><p class="sub">建立一次帳號，之後受邀活動都能使用同一份個人資料。</p>${message ? `<p class="notice">${escapeHtml(message)}</p>` : ''}<form id="auth-form">${register ? `<div class="field"><label for="full-name">中文全名</label><input id="full-name" name="fullName" autocomplete="name" required maxlength="100"></div>` : ''}<div class="field"><label for="email">電子郵件</label><input id="email" name="email" type="email" autocomplete="email" required></div><div class="field"><label for="password">密碼</label><input id="password" name="password" type="password" autocomplete="${register ? 'new-password' : 'current-password'}" minlength="8" required></div><button class="button" type="submit">${register ? '註冊' : '登入'}</button></form><button class="link-button switch-auth" id="switch-auth">${register ? '已有帳號？登入' : '第一次使用？建立帳號'}</button></div></section>`;
+  app.innerHTML = `<section class="auth"><div class="panel"><div class="eyebrow">好友旅行</div><h1>${register ? '建立你的帳號' : '登入行程系統'}</h1><p class="sub">建立一次帳號，之後受邀活動都能使用同一份個人資料。</p>${message ? `<p class="notice">${escapeHtml(message)}</p>` : ''}<form id="auth-form">${register ? `<div class="field"><label for="full-name">中文全名</label><input id="full-name" name="fullName" autocomplete="name" required maxlength="100"></div>` : ''}<div class="field"><label for="email">電子郵件</label><input id="email" name="email" type="email" autocomplete="email" required></div><div class="field"><label for="password">密碼</label><input id="password" name="password" type="password" autocomplete="${register ? 'new-password' : 'current-password'}" minlength="8" required></div><button class="button" type="submit">${register ? '註冊' : '登入'}</button></form>${!register ? '<button class="link-button" id="forgot-password" type="button">忘記密碼？寄送重設連結</button>' : ''}<button class="link-button switch-auth" id="switch-auth">${register ? '已有帳號？登入' : '第一次使用？建立帳號'}</button></div></section>`;
   document.querySelector('#switch-auth').addEventListener('click', () => renderAuth(!register));
+  document.querySelector('#forgot-password')?.addEventListener('click', async () => {
+    const email = document.querySelector('#email').value.trim().toLowerCase();
+    if (!email) { renderAuth(false, '請先輸入註冊時使用的電子郵件，再點選忘記密碼。'); return; }
+    try {
+      const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}${location.pathname}` });
+      if (error) throw error;
+      renderAuth(false, '若此信箱已註冊，系統已寄出密碼重設信，請依信件指示設定新密碼。');
+    } catch (error) { fail(error); }
+  });
   document.querySelector('#auth-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -70,7 +80,27 @@ function renderAuth(register = false, message = '') {
         user = data.user;
         await loadAuthenticatedApp();
       }
-    } catch (error) { fail(error); }
+    } catch (error) {
+      if (!register && error.message === 'Invalid login credentials') {
+        renderAuth(false, '帳號或密碼不正確。請確認註冊信箱與密碼；若仍無法登入，請使用「忘記密碼」寄送重設連結。');
+      } else fail(error);
+    }
+  });
+}
+
+function renderPasswordRecovery(message = '') {
+  account.innerHTML = '';
+  app.innerHTML = `<section class="auth"><div class="panel"><div class="eyebrow">帳號安全</div><h1>設定新密碼</h1><p class="sub">請輸入至少 8 個字元的新密碼。</p>${message ? `<p class="error">${escapeHtml(message)}</p>` : ''}<form id="recovery-form"><div class="field"><label for="new-password">新密碼</label><input id="new-password" type="password" autocomplete="new-password" minlength="8" required></div><div class="field"><label for="confirm-password">再次輸入新密碼</label><input id="confirm-password" type="password" autocomplete="new-password" minlength="8" required></div><button class="button" type="submit">更新密碼</button></form></div></section>`;
+  document.querySelector('#recovery-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const password = document.querySelector('#new-password').value;
+    if (password !== document.querySelector('#confirm-password').value) { renderPasswordRecovery('兩次輸入的密碼不一致，請重新輸入。'); return; }
+    try {
+      const { error } = await db.auth.updateUser({ password });
+      if (error) throw error;
+      await db.auth.signOut();
+      renderAuth(false, '密碼已更新，請使用新密碼登入。');
+    } catch (error) { renderPasswordRecovery(error.message || '更新密碼失敗，請重新寄送重設信。'); }
   });
 }
 
