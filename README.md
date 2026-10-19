@@ -4,7 +4,7 @@
 
 ## 功能
 
-- 會員以電子郵件註冊及登入，個人資料可跨活動沿用。
+- 會員以電子郵件與密碼註冊及登入，註冊時需重複輸入 email 確認；本系統不寄送驗證或密碼重設信。
 - 已登入會員可瀏覽已發布活動；只有使用有效邀請連結的會員能進入報名。
 - 活動管理者建立國內／國外活動，設定房間床位、車輛乘客座位和旅平險保額與保費。
 - 報名分兩階段：受邀者先填基本資料與參加意願；管理者確認名單並設定車輛／房間後，再開放選位。
@@ -18,7 +18,8 @@
 
 1. 建立 Supabase 專案，選擇離團員較近的資料區域；若主要團員在台灣，可先選 Singapore。
 2. 按檔名順序在 SQL Editor 執行 `supabase/migrations/` 內所有 migrations，或使用 Supabase CLI 部署 migrations。
-3. 使用網站註冊擁有人帳號、完成 email 驗證，再於 SQL Editor 將該帳號設為擁有人：
+3. 在 Supabase Dashboard 的 Authentication → Sign In / Providers → Email 關閉 **Confirm email**，使帳號註冊後立即登入。這會停用信箱所有權驗證；網站會要求使用者重複輸入 email 並確認，但仍無法保證信箱真的屬於該使用者。
+4. 使用網站註冊擁有人帳號，再於 SQL Editor 將該帳號設為擁有人：
 
    ```sql
    update public.profiles
@@ -26,9 +27,9 @@
    where id = (select id from auth.users where email = 'YOUR_EMAIL');
    ```
 
-4. Authentication 的 Site URL 與 Redirect URLs 加入兩個部署網址。email verification 的 redirect 使用目前邀請連結網址。
-5. 預設郵件服務只適合測試，且可能只寄送至專案團隊信箱並受限流。正式邀請團員前，請在 Authentication → Emails → SMTP Settings 設定自訂 SMTP，並確認寄件網域與驗證信模板。
-6. 從 Supabase Project Settings 複製 Project URL 與公開 anon/publishable key。**不可使用 service role key。**
+5. Authentication 的 Site URL 與 Redirect URLs 加入兩個部署網址。
+6. 因為不使用驗證信與重設密碼信，請確保邀請者透過其他方式核對 email，並告知使用者妥善保存密碼。若有人填錯 email 或忘記密碼，擁有人需在 Supabase Dashboard 的 Authentication → Users 找到該使用者，修正其 email／密碼，或刪除該使用者後讓對方重新註冊。刪除前先檢查是否已有活動資料需要保留。
+7. 從 Supabase Project Settings 複製 Project URL 與公開 anon/publishable key。**不可使用 service role key。**
 
 ## 部署
 

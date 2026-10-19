@@ -55,17 +55,8 @@ async function loadAuthenticatedApp() {
 
 function renderAuth(register = false, message = '') {
   account.innerHTML = '';
-  app.innerHTML = `<section class="auth"><div class="panel"><div class="eyebrow">好友旅行</div><h1>${register ? '建立你的帳號' : '登入行程系統'}</h1><p class="sub">建立一次帳號，之後受邀活動都能使用同一份個人資料。</p>${message ? `<p class="notice">${escapeHtml(message)}</p>` : ''}<form id="auth-form">${register ? `<div class="field"><label for="full-name">中文全名</label><input id="full-name" name="fullName" autocomplete="name" required maxlength="100"></div>` : ''}<div class="field"><label for="email">電子郵件</label><input id="email" name="email" type="email" autocomplete="email" required></div><div class="field"><label for="password">密碼</label><input id="password" name="password" type="password" autocomplete="${register ? 'new-password' : 'current-password'}" minlength="8" required></div><button class="button" type="submit">${register ? '註冊' : '登入'}</button></form>${!register ? '<button class="link-button" id="forgot-password" type="button">忘記密碼？寄送重設連結</button>' : ''}<button class="link-button switch-auth" id="switch-auth">${register ? '已有帳號？登入' : '第一次使用？建立帳號'}</button></div></section>`;
+  app.innerHTML = `<section class="auth"><div class="panel"><div class="eyebrow">好友旅行</div><h1>${register ? '建立你的帳號' : '登入行程系統'}</h1><p class="sub">建立一次帳號，之後受邀活動都能使用同一份個人資料。</p>${message ? `<p class="notice">${escapeHtml(message)}</p>` : ''}<div class="notice">本系統不寄送信箱驗證或密碼重設信。請確認電子郵件拼寫並妥善保存密碼；若填錯或忘記密碼，請私訊邀請你的人，由管理者協助更正或刪除帳號。</div><form id="auth-form">${register ? `<div class="field"><label for="full-name">中文全名</label><input id="full-name" name="fullName" autocomplete="name" required maxlength="100"></div>` : ''}<div class="field"><label for="email">電子郵件</label><input id="email" name="email" type="email" autocomplete="email" required></div>${register ? '<div class="field"><label for="confirm-email">再次輸入電子郵件</label><input id="confirm-email" name="confirmEmail" type="email" autocomplete="email" required></div>' : ''}<div class="field"><label for="password">密碼</label><input id="password" name="password" type="password" autocomplete="${register ? 'new-password' : 'current-password'}" minlength="8" required></div>${register ? '<label class="field checkbox-field"><input type="checkbox" name="email-confirmed" required><span>我已再次核對信箱，並了解填錯或忘記密碼時需聯絡邀請人處理。</span></label>' : ''}<button class="button" type="submit">${register ? '註冊' : '登入'}</button></form><button class="link-button switch-auth" id="switch-auth">${register ? '已有帳號？登入' : '第一次使用？建立帳號'}</button></div></section>`;
   document.querySelector('#switch-auth').addEventListener('click', () => renderAuth(!register));
-  document.querySelector('#forgot-password')?.addEventListener('click', async () => {
-    const email = document.querySelector('#email').value.trim().toLowerCase();
-    if (!email) { renderAuth(false, '請先輸入註冊時使用的電子郵件，再點選忘記密碼。'); return; }
-    try {
-      const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}${location.pathname}` });
-      if (error) throw error;
-      renderAuth(false, '若此信箱已註冊，系統已寄出密碼重設信，請依信件指示設定新密碼。');
-    } catch (error) { fail(error); }
-  });
   document.querySelector('#auth-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -73,10 +64,14 @@ function renderAuth(register = false, message = '') {
     const password = String(form.get('password'));
     try {
       if (register) {
-        const { data, error } = await db.auth.signUp({ email, password, options: { data: { full_name: String(form.get('fullName')).trim() }, emailRedirectTo: location.href } });
+        if (email !== String(form.get('confirmEmail')).trim().toLowerCase()) {
+          renderAuth(true, '兩次輸入的電子郵件不一致，請重新核對。');
+          return;
+        }
+        const { data, error } = await db.auth.signUp({ email, password, options: { data: { full_name: String(form.get('fullName')).trim() } } });
         if (error) throw error;
         if (data.session) { user = data.user; await loadAuthenticatedApp(); }
-        else renderAuth(false, '註冊請求已送出。若是第一次註冊，請到信箱收取驗證信；若此信箱曾註冊，請改為登入或使用忘記密碼。未收到信時請檢查垃圾郵件，或聯絡管理者確認郵件寄送設定。');
+        else renderAuth(false, '註冊已建立，但目前 Supabase 仍要求 email 確認。請管理者先關閉 Email provider 的 Confirm email 設定後，再重新註冊。');
       } else {
         const { data, error } = await db.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -85,7 +80,7 @@ function renderAuth(register = false, message = '') {
       }
     } catch (error) {
       if (!register && error.message === 'Invalid login credentials') {
-        renderAuth(false, '帳號或密碼不正確。請確認註冊信箱與密碼；若仍無法登入，請使用「忘記密碼」寄送重設連結。');
+        renderAuth(false, '帳號或密碼不正確。請確認電子郵件拼寫與密碼；若忘記密碼或註冊時信箱打錯，請私訊邀請你的人，由管理者協助處理。');
       } else if (register && /email|mail|smtp|rate limit/i.test(error.message || '')) {
         renderAuth(true, '帳號註冊或驗證信寄送失敗，請稍後再試；若持續發生，請聯絡管理者檢查 Supabase Auth 郵件服務。');
       } else fail(error);
