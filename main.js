@@ -76,7 +76,7 @@ function renderAuth(register = false, message = '') {
         const { data, error } = await db.auth.signUp({ email, password, options: { data: { full_name: String(form.get('fullName')).trim() }, emailRedirectTo: location.href } });
         if (error) throw error;
         if (data.session) { user = data.user; await loadAuthenticatedApp(); }
-        else renderAuth(false, '請到電子郵件收取驗證信，驗證後再登入即可加入邀請活動。');
+        else renderAuth(false, '註冊請求已送出。若是第一次註冊，請到信箱收取驗證信；若此信箱曾註冊，請改為登入或使用忘記密碼。未收到信時請檢查垃圾郵件，或聯絡管理者確認郵件寄送設定。');
       } else {
         const { data, error } = await db.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -86,6 +86,8 @@ function renderAuth(register = false, message = '') {
     } catch (error) {
       if (!register && error.message === 'Invalid login credentials') {
         renderAuth(false, '帳號或密碼不正確。請確認註冊信箱與密碼；若仍無法登入，請使用「忘記密碼」寄送重設連結。');
+      } else if (register && /email|mail|smtp|rate limit/i.test(error.message || '')) {
+        renderAuth(true, '帳號註冊或驗證信寄送失敗，請稍後再試；若持續發生，請聯絡管理者檢查 Supabase Auth 郵件服務。');
       } else fail(error);
     }
   });

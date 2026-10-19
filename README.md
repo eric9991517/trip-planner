@@ -27,7 +27,8 @@
    ```
 
 4. Authentication 的 Site URL 與 Redirect URLs 加入兩個部署網址。email verification 的 redirect 使用目前邀請連結網址。
-5. 從 Supabase Project Settings 複製 Project URL 與公開 anon/publishable key。**不可使用 service role key。**
+5. 預設郵件服務只適合測試，且可能只寄送至專案團隊信箱並受限流。正式邀請團員前，請在 Authentication → Emails → SMTP Settings 設定自訂 SMTP，並確認寄件網域與驗證信模板。
+6. 從 Supabase Project Settings 複製 Project URL 與公開 anon/publishable key。**不可使用 service role key。**
 
 ## 部署
 
