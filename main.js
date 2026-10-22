@@ -224,10 +224,14 @@ function renderEvent(event, membership, rooms, vehicles, roster, manager) {
   const attendance = membership?.attendance_status || '';
   const detailsLocked = Boolean(membership?.details_locked_at);
   const inputLock = detailsLocked ? 'disabled' : '';
-  const profilePanel = membership ? `<div class="section-title"><h2>個人資料</h2><span class="small">本次活動資料僅本人與管理者可查看</span></div><section class="panel"><form id="profile-form"><div class="field-grid"><div class="field"><label>中文全名</label><input name="full_name" required ${inputLock} value="${escapeHtml(membership.full_name || profile.full_name || '')}"></div><div class="field"><label>護照英文姓名 ${foreign ? '（必填）' : '（選填）'}</label><input name="passport_english_name" ${foreign ? 'required' : ''} ${inputLock} value="${escapeHtml(membership.passport_english_name || profile.passport_english_name || '')}"></div><div class="field"><label>電話</label><input name="phone" required ${inputLock} value="${escapeHtml(membership.phone || profile.phone || '')}"></div><div class="field"><label>西元出生年月日</label><input name="date_of_birth" type="date" required max="${localDateInputMax()}" ${inputLock} value="${escapeHtml(membership.date_of_birth || profile.date_of_birth || '')}"></div><div class="field"><label>是否參加</label><select name="attendance" required ${event.registration_open ? '' : 'disabled'}><option value="">請選擇</option><option value="attending" ${attendance === 'attending' ? 'selected' : ''}>我要參加</option><option value="not_attending" ${attendance === 'not_attending' ? 'selected' : ''}>暫不參加</option></select></div></div>${foreign ? insuranceForm(event, membership, detailsLocked) : ''}${detailsLocked ? '<p class="small">你已確認參加，基本資料與旅平險選擇已鎖定；如需更正請聯絡管理者。</p>' : ''}<button class="button" type="submit" ${detailsLocked && !event.registration_open ? 'disabled' : ''}>${detailsLocked ? '更新報名意願' : event.registration_open ? '儲存資料與報名意願' : '儲存資料'}</button></form></section>` : `<section class="panel"><p class="small">管理者檢視模式。你可以查看活動內容與報名概況，不會以團員身分提交資料或選位。</p></section>`;
+  const profilePanel = membership ? `<div class="section-title"><h2>個人資料</h2><span class="small">本次活動資料僅本人與管理者可查看</span></div><section class="panel"><form id="profile-form"><div class="field-grid"><div class="field"><label>中文全名</label><input name="full_name" required ${inputLock} value="${escapeHtml(membership.full_name || profile.full_name || '')}"></div><div class="field"><label>護照英文姓名 ${foreign ? '（參加時必填）' : '（選填）'}</label><input name="passport_english_name" ${foreign && attendance === 'attending' ? 'required' : ''} ${inputLock} data-attending-required value="${escapeHtml(membership.passport_english_name || profile.passport_english_name || '')}"></div><div class="field"><label>電話（參加時必填）</label><input name="phone" ${attendance === 'attending' ? 'required' : ''} data-attending-required pattern="09[0-9]{2}-[0-9]{6}" title="請輸入 09xx-xxxxxx，例如 0912-345678" ${inputLock} value="${escapeHtml(membership.phone || profile.phone || '')}"></div><div class="field"><label>西元出生年月日（參加時必填）</label><input name="date_of_birth" type="date" ${attendance === 'attending' ? 'required' : ''} data-attending-required max="${localDateInputMax()}" ${inputLock} value="${escapeHtml(membership.date_of_birth || profile.date_of_birth || '')}"></div><div class="field"><label>登入 Email（參加時必填）</label><input name="email" type="email" readonly ${attendance === 'attending' ? 'required' : ''} data-attending-required value="${escapeHtml(user.email || '')}"></div><div class="field"><label>是否參加</label><select name="attendance" required ${event.registration_open ? '' : 'disabled'}><option value="">請選擇</option><option value="attending" ${attendance === 'attending' ? 'selected' : ''}>我要參加</option><option value="not_attending" ${attendance === 'not_attending' ? 'selected' : ''}>暫不參加</option></select></div></div>${foreign ? insuranceForm(event, membership, detailsLocked) : ''}${detailsLocked ? '<p class="small">你已確認參加，基本資料與旅平險選擇已鎖定；如需更正請聯絡管理者。</p>' : '<p class="small">若選擇暫不參加，只需填寫中文全名；選擇我要參加後，才需要完成其餘欄位。</p>'}<button class="button" type="submit" ${detailsLocked && !event.registration_open ? 'disabled' : ''}>${detailsLocked ? '更新報名意願' : event.registration_open ? '儲存資料與報名意願' : '儲存資料'}</button></form></section>` : `<section class="panel"><p class="small">管理者檢視模式。你可以查看活動內容與報名概況，不會以團員身分提交資料或選位。</p></section>`;
   app.innerHTML = `<button class="link-button" id="back">← 返回活動總覽</button><div class="page-head"><div><div class="eyebrow">${foreign ? '國外旅行' : '國內旅行'}　/　${membership ? '已受邀' : '管理者檢視'}</div><h1>${escapeHtml(event.title)}</h1><div class="sub">${dateText(event.starts_on)}－${dateText(event.ends_on)}　・　${escapeHtml(event.destination || '')}</div></div><span class="pill">${event.registration_open ? '第一階段報名中' : '報名已截止'}</span></div>${responsePanel}${resourceStage}<div class="section-title"><h2>活動說明</h2></div><section class="panel"><p>${escapeHtml(event.description || '尚無活動說明。')}</p></section>${profilePanel}`;
   document.querySelector('#back').addEventListener('click', loadApp);
   document.querySelectorAll('.reserve').forEach(button => button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = '處理中…';
+    showToast('正在更新選位…');
     try {
       const cancelling = button.dataset.action === 'cancel';
       const rpc = cancelling ? 'cancel_resource_selection' : button.dataset.type === 'room' ? 'choose_room' : 'choose_vehicle';
@@ -236,16 +240,49 @@ function renderEvent(event, membership, rooms, vehicles, roster, manager) {
       if (error) throw error;
       showToast(cancelling ? '已取消選擇' : '已完成選擇');
       await openEvent(event.id);
-    } catch (error) { fail(error); }
+    } catch (error) { fail(error); button.disabled = false; button.textContent = button.dataset.action === 'cancel' ? '取消選擇' : '選擇'; }
   }));
-  document.querySelector('#profile-form')?.addEventListener('submit', async formEvent => {
+  const profileForm = document.querySelector('#profile-form');
+  const updateProfileRequirements = () => {
+    const attendingSelection = profileForm?.elements.attendance?.value === 'attending';
+    profileForm?.querySelectorAll('[data-attending-required]').forEach(field => {
+      field.required = attendingSelection;
+    });
+    const passportField = profileForm?.elements.passport_english_name;
+    if (passportField) passportField.required = attendingSelection && foreign;
+  };
+  profileForm?.elements.attendance?.addEventListener('change', updateProfileRequirements);
+  updateProfileRequirements();
+  profileForm?.addEventListener('submit', async formEvent => {
     formEvent.preventDefault();
     const values = Object.fromEntries(new FormData(formEvent.currentTarget));
     try {
       const attendanceProvided = event.registration_open && ['attending', 'not_attending'].includes(values.attendance);
-      if (!detailsLocked) {
+      const attendingSubmission = values.attendance === 'attending';
+      if (!attendanceProvided) {
+        showToast('請先選擇是否參加');
+        return;
+      }
+      if (!formEvent.currentTarget.checkValidity()) {
+        formEvent.currentTarget.reportValidity();
+        return;
+      }
+      if (attendingSubmission && !/^09\d{2}-\d{6}$/.test(values.phone || '')) {
+        showToast('電話格式須為 09xx-xxxxxx');
+        formEvent.currentTarget.elements.phone.focus();
+        return;
+      }
+      if (attendingSubmission && !/^[^\s@]+@[^\s@]+$/.test(values.email || user.email || '')) {
+        showToast('Email 格式須包含 @');
+        return;
+      }
+      if (!detailsLocked && attendingSubmission) {
         const { error: memberError } = await db.rpc('update_my_event_details', { p_event_id: event.id, p_full_name: values.full_name, p_date_of_birth: values.date_of_birth, p_passport_english_name: values.passport_english_name, p_phone: values.phone, p_insurance_opt_in: document.querySelector('input[name="insurance"]:checked')?.value === 'yes' });
         if (memberError) throw memberError;
+      }
+      if (!detailsLocked && !attendingSubmission) {
+        const { error: profileError } = await db.from('profiles').update({ full_name: values.full_name.trim() }).eq('id', user.id);
+        if (profileError) throw profileError;
       }
       if (attendanceProvided) {
         const { error: attendanceError } = await db.rpc('respond_to_event', { p_event_id: event.id, p_attending: values.attendance === 'attending' });
@@ -253,7 +290,8 @@ function renderEvent(event, membership, rooms, vehicles, roster, manager) {
       }
       if (attendanceProvided) {
         showToast('已登記完成');
-        await loadApp();
+        if (attendingSubmission) await openEvent(event.id);
+        else await loadApp();
       } else {
         showToast(detailsLocked ? '報名意願已更新' : '個人資料已儲存');
         await openEvent(event.id);
