@@ -17,6 +17,9 @@
 .vue-shell{min-height:100vh;background:#f5f6f2}
 .vue-shell .el-header{height:68px;line-height:normal}
 .vue-shell .el-main{overflow:visible}
+.el-input.is-disabled .el-input__wrapper{background:#eef1ee;box-shadow:0 0 0 1px #dfe5df inset}
+.el-input.is-disabled .el-input__inner{color:#7b857d;-webkit-text-fill-color:#7b857d}
+.resource-members{display:block;margin-top:5px;color:#78827c;font-size:12px;line-height:1.5}
 .registration-form{max-width:760px}
 .registration-form .el-form-item{margin-bottom:18px}
 .submit-button{margin-top:16px}
