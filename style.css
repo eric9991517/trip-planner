@@ -17,6 +17,8 @@
 .vue-shell{min-height:100vh;background:#f5f6f2}
 .vue-shell .el-header{height:68px;line-height:normal}
 .vue-shell .el-main{overflow:visible}
+.content-shell{flex-direction:row;align-items:stretch;min-height:calc(100vh - 68px)}
+.content-shell>.el-main{flex:1;min-width:0}
 .side-nav{width:210px!important;min-height:calc(100vh - 68px);background:#fff;border-right:1px solid var(--line);padding:22px 12px}
 .side-title{padding:0 12px 12px;color:var(--green);font-weight:750;font-size:14px}
 .side-nav .el-menu{border-right:0;background:transparent}
@@ -51,6 +53,7 @@
   .side-nav .el-menu{display:flex;overflow-x:auto;gap:4px}
   .side-nav .el-menu-item{white-space:nowrap;padding:0 12px}
   .resource-form{flex-wrap:wrap}
+  .content-shell{flex-direction:column}
   .resource-row{align-items:flex-start}
   .resource-row .el-button{flex-shrink:0}
 }
