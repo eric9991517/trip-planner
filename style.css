@@ -17,9 +17,20 @@
 .vue-shell{min-height:100vh;background:#f5f6f2}
 .vue-shell .el-header{height:68px;line-height:normal}
 .vue-shell .el-main{overflow:visible}
+.side-nav{width:210px!important;min-height:calc(100vh - 68px);background:#fff;border-right:1px solid var(--line);padding:22px 12px}
+.side-title{padding:0 12px 12px;color:var(--green);font-weight:750;font-size:14px}
+.side-nav .el-menu{border-right:0;background:transparent}
+.side-nav .el-menu-item{height:44px;line-height:44px;border-radius:8px;margin:3px 0}
+.side-nav .el-menu-item.is-active{background:var(--mint);color:var(--green);font-weight:700}
 .el-input.is-disabled .el-input__wrapper{background:#eef1ee;box-shadow:0 0 0 1px #dfe5df inset}
 .el-input.is-disabled .el-input__inner{color:#7b857d;-webkit-text-fill-color:#7b857d}
 .resource-members{display:block;margin-top:5px;color:#78827c;font-size:12px;line-height:1.5}
+.resource-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.resource-form{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;margin-top:14px}
+.resource-form .el-form-item{margin:0}
+.resource-form .el-input{width:130px}
+.resource-form .el-input-number{width:82px}
+.resource-form .el-button{margin-left:0}
 .registration-form{max-width:760px}
 .registration-form .el-form-item{margin-bottom:18px}
 .submit-button{margin-top:16px}
@@ -36,6 +47,10 @@
   .page-head{align-items:flex-start;flex-direction:column}
   .page-head>.el-button,.page-head>.el-tag{align-self:flex-start}
   .account-bar>span{display:none}
+  .side-nav{width:100%!important;min-height:auto;border-right:0;border-bottom:1px solid var(--line);padding:10px 12px}
+  .side-nav .el-menu{display:flex;overflow-x:auto;gap:4px}
+  .side-nav .el-menu-item{white-space:nowrap;padding:0 12px}
+  .resource-form{flex-wrap:wrap}
   .resource-row{align-items:flex-start}
   .resource-row .el-button{flex-shrink:0}
 }
